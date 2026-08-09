@@ -29,18 +29,20 @@ session database.
 
 ## Local setup
 
-Run the Router API first:
+Clone both repositories into the same parent directory, then run the Router API
+first:
 
 ```bash
-cd /path/to/model-router
-source .venv/bin/activate
-export OPENROUTER_API_KEY=sk-or-v1-your-key
-uvicorn app:app --reload --port 8000
+cd /Users/asish/Documents/claude_code/model-router-backend
+source ../.venv/bin/activate
+ROUTER_SERVICE_TOKEN=local-test-token \
+python -m uvicorn app:app --host 127.0.0.1 --port 8010 --env-file ../.env
 ```
 
-Then configure and run the Slack worker:
+In a second terminal, configure and run the Slack worker:
 
 ```bash
+cd /Users/asish/Documents/claude_code/slack-ai-model-router
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -53,9 +55,11 @@ Required Slack worker environment:
 ```dotenv
 SLACK_BOT_TOKEN=xoxb-your-token
 SLACK_APP_TOKEN=xapp-your-token
-ROUTER_API_URL=http://127.0.0.1:8000
-ROUTER_SERVICE_TOKEN=local-development-placeholder
+ROUTER_API_URL=http://127.0.0.1:8010
+ROUTER_SERVICE_TOKEN=local-test-token
 ROUTER_TIMEOUT_SECONDS=120
+LOG_LEVEL=INFO
+METRICS_PORT=9091
 ```
 
 The backend enforces `ROUTER_SERVICE_TOKEN` in production. Use the same secret
@@ -75,6 +79,15 @@ for local development when no metrics collector is running.
 LOG_LEVEL=INFO
 METRICS_PORT=9091
 ```
+
+When using the backend repository's local monitoring stack, open:
+
+- Grafana: `http://127.0.0.1:3001`
+- Prometheus targets: `http://127.0.0.1:9090/targets`
+
+Both `router-api` and `slack-worker` should report `UP`. After a Slack reply,
+the dashboard records the chosen model tier, token usage, Router API latency,
+fallbacks, and Slack delivery outcome.
 
 ## Slack setup
 
@@ -105,6 +118,14 @@ Mention the bot:
 The Slack thread ID becomes the backend `session_id`, so follow-up mentions in
 the same thread share the backend's conversation memory.
 
+## Security
+
+Keep `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `ROUTER_SERVICE_TOKEN` in
+environment variables or your deployment platform's secret manager. Never
+commit `.env` files or include real credentials in screenshots, logs, issues,
+or pull requests. The worker does not require the OpenRouter key; that secret
+belongs only to the Router API.
+
 ## Tests
 
 ```bash
@@ -116,6 +137,10 @@ Tests use an in-memory HTTP transport and do not call Slack, the Router API, or
 OpenRouter.
 
 ## Production roadmap
+
+The code is containerized, authenticated, tested, observable, and ready to be
+deployed. It is not always-on until the Router API and Slack worker are hosted
+as separate long-running services.
 
 - [x] Enforce service-token authentication on the Router API
 - [ ] Add Redis queue and Slack `event_id` deduplication
