@@ -58,9 +58,23 @@ ROUTER_SERVICE_TOKEN=local-development-placeholder
 ROUTER_TIMEOUT_SECONDS=120
 ```
 
-The backend does not enforce `ROUTER_SERVICE_TOKEN` yet. Adding authenticated
-service-to-service requests is the next production step; the client already sends
-the header so it can be enabled without changing Slack message handling.
+The backend enforces `ROUTER_SERVICE_TOKEN` in production. Use the same secret
+value in both services; never commit it to either repository.
+
+## Observability
+
+The worker emits structured JSON logs with a Slack event correlation ID. It
+records Router API latency, result tier/category/model, fallback status, and Slack
+delivery outcome. Message text, credentials, and service tokens are not
+deliberately logged or used as metric labels.
+
+Set `METRICS_PORT` to expose Prometheus metrics from the worker. Leave it empty
+for local development when no metrics collector is running.
+
+```dotenv
+LOG_LEVEL=INFO
+METRICS_PORT=9091
+```
 
 ## Slack setup
 
@@ -103,12 +117,14 @@ OpenRouter.
 
 ## Production roadmap
 
-- [ ] Enforce service-token authentication on the Router API
+- [x] Enforce service-token authentication on the Router API
 - [ ] Add Redis queue and Slack `event_id` deduplication
 - [ ] Move backend session memory to Redis
 - [ ] Add per-workspace budgets and rate limits
-- [ ] Add structured logs, metrics, and tracing
-- [ ] Containerize and deploy API and Slack worker separately
+- [x] Add structured logs and Prometheus metrics
+- [x] Containerize API and Slack worker separately
+- [ ] Export distributed traces to a monitoring backend
+- [ ] Deploy API and Slack worker separately
 
 ## License
 
