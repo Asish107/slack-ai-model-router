@@ -10,7 +10,7 @@ from slack_bolt.async_app import AsyncApp
 
 load_dotenv()
 
-from slack_router import ModelRouter  # noqa: E402
+from router_client import RouterClient  # noqa: E402
 
 
 logging.basicConfig(
@@ -25,9 +25,8 @@ def clean_mention(text: str) -> str:
     return MENTION_PATTERN.sub("", text).strip()
 
 
-def create_app(model_router: ModelRouter | None = None) -> AsyncApp:
+def create_app(router_client: RouterClient) -> AsyncApp:
     app = AsyncApp(token=os.environ["SLACK_BOT_TOKEN"])
-    router = model_router or ModelRouter()
 
     @app.event("app_mention")
     async def handle_mention(event, say, client):
@@ -41,13 +40,13 @@ def create_app(model_router: ModelRouter | None = None) -> AsyncApp:
             return
 
         pending = await say(text="Routing your request…", thread_ts=thread_ts)
-        thread_id = f"{event['channel']}:{thread_ts}"
+        session_id = f"slack:{event['channel']}:{thread_ts}"
         try:
-            result = await router.route(prompt, thread_id)
+            result = await router_client.route(prompt, session_id)
             fallback = " · fallback" if result.fallback_used else ""
             metadata = (
                 f"_{result.tier} · {result.category} · "
-                f"{result.model} · {result.latency_ms} ms{fallback}_"
+                f"{result.model} · {result.latency_seconds:.2f} s{fallback}_"
             )
             response_text = f"{result.answer}\n\n{metadata}"
         except Exception:
@@ -62,12 +61,16 @@ def create_app(model_router: ModelRouter | None = None) -> AsyncApp:
 
 
 async def main() -> None:
-    app = create_app()
+    router_client = RouterClient()
+    app = create_app(router_client)
     handler = AsyncSocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
     try:
+        health = await router_client.health()
+        logger.info("Router API is healthy: %s", health.get("status"))
         await handler.start_async()
     finally:
         await handler.close_async()
+        await router_client.close()
 
 
 if __name__ == "__main__":
