@@ -2,10 +2,19 @@ import asyncio
 import logging
 import os
 import re
+import time
 
 from dotenv import load_dotenv
 from slack_bolt.adapter.socket_mode.aiohttp import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
+from observability import (
+    ROUTER_CALLS,
+    ROUTER_LATENCY,
+    SLACK_EVENTS,
+    configure_logging,
+    event_id_var,
+    start_metrics_if_configured,
+)
 
 
 load_dotenv()
@@ -13,10 +22,7 @@ load_dotenv()
 from router_client import RouterClient  # noqa: E402
 
 
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+configure_logging(os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 MENTION_PATTERN = re.compile(r"<@[A-Z0-9]+>", re.IGNORECASE)
 SLACK_MESSAGE_LIMIT = 3500
@@ -51,19 +57,32 @@ def create_app(router_client: RouterClient) -> AsyncApp:
 
     @app.event("app_mention")
     async def handle_mention(event, say, client):
+        event_token = event_id_var.set(str(event.get("event_ts") or event.get("ts") or "-"))
         if event.get("bot_id") or event.get("subtype") == "bot_message":
+            event_id_var.reset(event_token)
             return
 
         prompt = clean_mention(event.get("text", ""))
         thread_ts = event.get("thread_ts", event["ts"])
         if not prompt:
             await say(text="What would you like help with?", thread_ts=thread_ts)
+            SLACK_EVENTS.labels("empty_prompt").inc()
+            event_id_var.reset(event_token)
             return
 
         pending = await say(text="Routing your request…", thread_ts=thread_ts)
         session_id = f"slack:{event['channel']}:{thread_ts}"
+        route_started = time.perf_counter()
         try:
             result = await router_client.route(prompt, session_id)
+            ROUTER_LATENCY.observe(time.perf_counter() - route_started)
+            ROUTER_CALLS.labels(
+                "success",
+                result.tier,
+                result.category,
+                result.model,
+                str(result.fallback_used).lower(),
+            ).inc()
             fallback = " · fallback" if result.fallback_used else ""
             metadata = (
                 f"_{result.tier} · {result.category} · "
@@ -75,19 +94,33 @@ def create_app(router_client: RouterClient) -> AsyncApp:
             else:
                 response_chunks.append(metadata)
         except Exception:
+            ROUTER_LATENCY.observe(time.perf_counter() - route_started)
+            ROUTER_CALLS.labels("error", "unknown", "unknown", "unknown", "false").inc()
             logger.exception("All model routes failed")
             response_chunks = ["Sorry, every configured model route failed. Try again."]
 
-        await client.chat_update(
-            channel=event["channel"], ts=pending["ts"], text=response_chunks[0]
-        )
-        for chunk in response_chunks[1:]:
-            await say(text=chunk, thread_ts=thread_ts)
+        try:
+            await client.chat_update(
+                channel=event["channel"], ts=pending["ts"], text=response_chunks[0]
+            )
+            for chunk in response_chunks[1:]:
+                await say(text=chunk, thread_ts=thread_ts)
+            SLACK_EVENTS.labels("delivered").inc()
+            logger.info("slack_response_delivered chunks=%s", len(response_chunks))
+        except Exception:
+            SLACK_EVENTS.labels("delivery_error").inc()
+            logger.exception("Slack response delivery failed")
+            raise
+        finally:
+            event_id_var.reset(event_token)
 
     return app
 
 
 async def main() -> None:
+    metrics_port = start_metrics_if_configured()
+    if metrics_port:
+        logger.info("Prometheus metrics listening on port %s", metrics_port)
     router_client = RouterClient()
     app = create_app(router_client)
     handler = AsyncSocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])

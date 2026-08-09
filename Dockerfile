@@ -10,7 +10,7 @@ RUN addgroup --system app && adduser --system --ingroup app app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY bot.py router_client.py ./
+COPY bot.py router_client.py observability.py ./
 RUN chown -R app:app /app
 
 USER app
