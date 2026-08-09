@@ -19,10 +19,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 MENTION_PATTERN = re.compile(r"<@[A-Z0-9]+>", re.IGNORECASE)
+SLACK_MESSAGE_LIMIT = 3500
 
 
 def clean_mention(text: str) -> str:
     return MENTION_PATTERN.sub("", text).strip()
+
+
+def split_slack_message(text: str, limit: int = SLACK_MESSAGE_LIMIT) -> list[str]:
+    """Split model output at natural boundaries below Slack's message limit."""
+    remaining = text.strip()
+    if not remaining:
+        return ["(The model returned an empty response.)"]
+
+    chunks: list[str] = []
+    while len(remaining) > limit:
+        split_at = remaining.rfind("\n", 0, limit + 1)
+        if split_at < limit // 2:
+            split_at = remaining.rfind(" ", 0, limit + 1)
+        if split_at < limit // 2:
+            split_at = limit
+        chunks.append(remaining[:split_at].rstrip())
+        remaining = remaining[split_at:].lstrip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
 
 
 def create_app(router_client: RouterClient) -> AsyncApp:
@@ -48,14 +69,20 @@ def create_app(router_client: RouterClient) -> AsyncApp:
                 f"_{result.tier} · {result.category} · "
                 f"{result.model} · {result.latency_seconds:.2f} s{fallback}_"
             )
-            response_text = f"{result.answer}\n\n{metadata}"
+            response_chunks = split_slack_message(result.answer)
+            if len(response_chunks[-1]) + len(metadata) + 2 <= SLACK_MESSAGE_LIMIT:
+                response_chunks[-1] = f"{response_chunks[-1]}\n\n{metadata}"
+            else:
+                response_chunks.append(metadata)
         except Exception:
             logger.exception("All model routes failed")
-            response_text = "Sorry, every configured model route failed. Try again."
+            response_chunks = ["Sorry, every configured model route failed. Try again."]
 
         await client.chat_update(
-            channel=event["channel"], ts=pending["ts"], text=response_text
+            channel=event["channel"], ts=pending["ts"], text=response_chunks[0]
         )
+        for chunk in response_chunks[1:]:
+            await say(text=chunk, thread_ts=thread_ts)
 
     return app
 
