@@ -18,6 +18,14 @@ OpenRouter model
 Threaded Slack answer + routing metadata
 ```
 
+## Demo
+
+The worker acknowledges the mention, calls the shared Router API, replaces the
+temporary status message with the answer, and appends the selected tier,
+category, model, and latency.
+
+![AI Model Router answering a Slack mention with routing metadata](docs/images/slack-routing-response.png)
+
 ## Why it is separate
 
 The Slack worker and Router API are independently deployable processes. This
